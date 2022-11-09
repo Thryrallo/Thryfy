@@ -16,6 +16,7 @@ namespace Thry.YTDB
 
         public string InitialSearch = "Taylor";
         public Animator LoadBarAnimator;
+        public Animator PaylistAnimator;
         public YT_DB_Manager DatabaseManager;
         public UdonBehaviour Adapter;
         public ThumbnailLoader ThubmnailLoader;
@@ -112,6 +113,16 @@ namespace Thry.YTDB
             }
         }
 
+        public void ShowPlaylist()
+        {
+            PaylistAnimator.SetTrigger("show");
+        }
+
+        public void HidePlaylist()
+        {
+            PaylistAnimator.SetTrigger("hide");
+        }
+
         // ===================== Search =====================
 
         void ExecuteSearch()
@@ -147,6 +158,8 @@ namespace Thry.YTDB
 
             ShowMoreArtists();
             ShowMoreSongs();
+
+            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(HidePlaylist));
         }
 
         void ShowMoreSongs()
@@ -158,7 +171,7 @@ namespace Thry.YTDB
                 if(isArtistSearch) index = _db.GetSongIdFromAristIndices(index);
                 CardPrefab.Setup(SongsContainer, _db.GetSongName(index), _db.GetSongArtist(index), true, _db.GetSongURL(index), 
                     _self, nameof(OnSongEqueue), nameof(param_OnSongEqueue), index,
-                    _self, nameof(OnSongPlay), nameof(param_OnSongPlay), index);
+                    _self, nameof(OnSongShuffle), nameof(param_OnSongPlay), index);
             }
             songsOffset += LOAD_STEPS;
             AdjustContainerHeight(SongsContainer, Mathf.Min(_resultsSongs[0], songsOffset));
@@ -218,9 +231,10 @@ namespace Thry.YTDB
         }
 
         [HideInInspector] public int param_OnSongPlay;
-        public void OnSongPlay()
+        public void OnSongShuffle()
         {
             PlayAndStartNewPlaylist(param_OnSongPlay);
+            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(ShowPlaylist));
         }
 
         [HideInInspector] public int param_OnSongEqueue;
