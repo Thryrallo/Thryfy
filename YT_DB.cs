@@ -14,18 +14,19 @@ namespace Thry.YTDB
     public partial class YT_DB : UdonSharpBehaviour
     {
         // data is sorted by name in alphabetical order
-        [SerializeField, HideInInspector] private string[] _names;
+        string[] _names;
+        string[] _artists;
         [SerializeField, HideInInspector] private VRCUrl[] _urls;
         [SerializeField, HideInInspector] private int[] _artistIndices;
         [SerializeField, HideInInspector] private int[] _related; // 5 per song
         [SerializeField, HideInInspector] private ushort[] _length;
 
-        [SerializeField, HideInInspector] private string[] _artists;
-
         [SerializeField, HideInInspector] private int[] _artistToSongIndices_artistIds;
         [SerializeField, HideInInspector] private int[] _artistToSongIndices_songIndices;
         [SerializeField, HideInInspector] private TextAsset _songAsset;
         [SerializeField, HideInInspector] private TextAsset _artistAsset;
+
+        bool _isLoaded;
 
         private void Start() 
         {
@@ -34,8 +35,10 @@ namespace Thry.YTDB
 
         public void LoadAssets()
         {
+            if(_isLoaded) return;
             _names = _songAsset.text.Split('\n');
             _artists = _artistAsset.text.Split('\n');
+            _isLoaded = true;
         }
 
         public int[] SearchByName(string name)
@@ -274,6 +277,12 @@ namespace Thry.YTDB
             return _length[index];
         }
 
+        public string GetSongLengthString(int index)
+        {
+            int length = _length[index];
+            return length / 60 + ":" + (length % 60).ToString("00");
+        }
+
         public int[] GetSongRelated(int index)
         {
             int count = 0;
@@ -306,7 +315,7 @@ namespace Thry.YTDB
             return _related[index * 5 + UnityEngine.Random.Range(0, count)];
         }
 
-        public string GetArtist(int index)
+        public string GetArtistName(int index)
         {
             return _artists[index];
         }
@@ -314,6 +323,11 @@ namespace Thry.YTDB
         public int GetSongCount()
         {
             return _names.Length;
+        }
+
+        public int GetArtistCount()
+        {
+            return _artists.Length;
         }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP

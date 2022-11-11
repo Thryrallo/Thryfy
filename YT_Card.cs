@@ -19,7 +19,7 @@ namespace Thry.YTDB
         public Sprite ThumbnailBackgroundRound;
         public Sprite ThumbnailBackgroundSquare;
 
-        VRCUrl _thumbnailUrl;
+        int _artistId;
 
         UdonBehaviour _callbackPrimaryBehaviour;
         string _callbackPrimaryMethod;
@@ -31,15 +31,15 @@ namespace Thry.YTDB
         string _callbackSecondaryField;
         object _callbackSecondaryValue;
 
-        public void Setup(Transform parent, string major, string minor, bool isRect, VRCUrl thumbnailUrl, 
+        public void Setup(Transform parent, string major, string minor, bool isRect, int artistId, 
             UdonBehaviour callbackPrimaryBehaviour, string callbackPrimaryMethod, string callbackPrimaryField, object callbackPrimaryValue,
             UdonBehaviour callbackSecondaryBehaviour, string callbackSecondaryMethod, string callbackSecondaryField, object callbackSecondaryValue)
         {
             GameObject instance = Instantiate(gameObject, parent);
             YT_Card card = instance.GetComponent<YT_Card>();
+            card._artistId = artistId;
             card.Major.text = major;
             card.Minor.text = minor;
-            card._thumbnailUrl = thumbnailUrl;
             card.ThumbnailBackground.sprite = isRect ? ThumbnailBackgroundSquare : ThumbnailBackgroundRound;
             card._callbackPrimaryBehaviour = callbackPrimaryBehaviour;
             card._callbackPrimaryMethod = callbackPrimaryMethod;
@@ -50,8 +50,13 @@ namespace Thry.YTDB
             card._callbackSecondaryField = callbackSecondaryField;
             card._callbackSecondaryValue = callbackSecondaryValue;
             card.SecondaryButton.gameObject.SetActive(callbackSecondaryBehaviour != null);
-            if(thumbnailUrl != null) ThumbnailLoaderManager.Request(card);
+            if(artistId > -1) card.Thumbnail.texture = ThumbnailLoaderManager.GetTexture(artistId);
             instance.SetActive(true);
+        }
+
+        private void OnDestroy() 
+        {
+            if(_artistId > -1) ThumbnailLoaderManager.UnregisterUse(_artistId);
         }
 
         public void OnPrimary()
@@ -70,16 +75,6 @@ namespace Thry.YTDB
                 _callbackSecondaryBehaviour.SetProgramVariable(_callbackSecondaryField, _callbackSecondaryValue);
                 _callbackSecondaryBehaviour.SendCustomEvent(_callbackSecondaryMethod);
             }
-        }
-
-        public VRCUrl GetThumbnailUrl()
-        {
-            return _thumbnailUrl;
-        }
-
-        public void SetThumbnailTexture(RenderTexture rt)
-        {
-            Thumbnail.texture = rt;
         }
     }
 

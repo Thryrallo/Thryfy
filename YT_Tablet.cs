@@ -12,11 +12,12 @@ namespace Thry.YTDB
     {
         const int PLAYLIST_AUTO_GEN_LENGTH = 10;
         const int MAX_PLAYLIST_LENGTH = 100;
-        const int LOAD_STEPS = 12;
+        const int SONGS_PER_LOAD_STEP = 20;
+        const int ARTISTS_PER_LOAD_STEP = 4;
 
         public string InitialSearch = "Taylor";
         public Animator LoadBarAnimator;
-        public Animator PaylistAnimator;
+        public Animator PlaylistAnimator;
         public YT_DB_Manager DatabaseManager;
         public UdonBehaviour Adapter;
         public ThumbnailLoader ThubmnailLoader;
@@ -27,6 +28,11 @@ namespace Thry.YTDB
         public GameObject ButtonSongsShowMore;
         public GameObject ButtonArtistsShowMore;
         public UnityEngine.UI.InputField SearchText;
+
+        public ScrollRect ScrollbarSearch;
+        public ScrollRect ScrollbarPlaylist;
+
+        public YT_ListItem ListItemPrefab;
 
         public Image PlayImage;
         public Image PauseImage;
@@ -45,10 +51,21 @@ namespace Thry.YTDB
         [UdonSynced] int _previousSongsHead = 0;
         [UdonSynced] int _previousSongsTail = 0;
         int[] _localPlaylistIndex = new int[MAX_PLAYLIST_LENGTH];
+        int _localPlaylistLength = 0;
         [UdonSynced] int _currentSongIndex = -1;
 
-        int[] _resultsSongs;
-        int[] _resultsArtists;
+        [UdonSynced] bool _isPlaylistOpen = false;
+
+        [UdonSynced] float _scrollPlaylist = 0.0f;
+        [UdonSynced] float _scrollSearch = 0.0f;
+
+        [UdonSynced] int search_songs_loadSteps = 0;
+        int local_search_song_loadSteps = 0;
+        [UdonSynced] int search_artists_loadSteps = 0;
+        int local_search_artists_loadSteps = 0;
+
+        int[] _resultsSongs = new int[]{ 0, 0, 0};
+        int[] _resultsArtists = new int[]{ 0, 0, 0};
         int songsOffset = 0;
         int artistsOffset = 0;
         bool _isPlaying = false;
@@ -63,9 +80,20 @@ namespace Thry.YTDB
             _self = this.GetComponent<UdonBehaviour>();
             if(Networking.IsOwner(gameObject))
             {
-                SearchText.text = InitialSearch;
-                OnInputChanged();
+                SendCustomEventDelayedFrames(nameof(SetInitalSearch), 1);
             }
+            for(int i = 0; i < MAX_PLAYLIST_LENGTH; i++)
+            {
+                _playlistButtons[i] = Instantiate(SongButtonPrefab.gameObject, PlaylistContainer).GetComponent<YT_SongButton>();
+                _playlistButtons[i].gameObject.SetActive(false);
+                _localPlaylistIndex[i] = -1;
+            }
+        }
+
+        public void SetInitalSearch()
+        {
+            SearchText.text = InitialSearch;
+            OnInputChanged();
         }
 
         public void OnInputChanged()
@@ -76,34 +104,90 @@ namespace Thry.YTDB
             }
 
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
-
             _searchTerm = SearchText.text;
+
+            _isPlaylistOpen = false;
+            UpdatePlaylistAnimator();
 
             RequestSerialization();
             ExecuteSearch();
         }
 
+        public void OnSearchScrollbarChanged()
+        {
+            if(Networking.IsOwner(gameObject))
+            {
+                _scrollSearch = ScrollbarSearch.verticalNormalizedPosition;
+                RequestSerialization();
+            }else
+            {
+                UpdateScrollbar();
+            }
+        }
+
+        public void OnPlaylistScrollbarChanged()
+        {
+            if(Networking.IsOwner(gameObject))
+            {
+                _scrollPlaylist = ScrollbarPlaylist.verticalNormalizedPosition;
+                RequestSerialization();
+            }else
+            {
+                UpdateScrollbar();
+            }
+        }
+
         public override void OnDeserialization()
         {
+            // sync playlist
             UpdatePlaylist();
-            if(_searchTerm == SearchText.text)
+            // sync scrollbars
+            UpdateScrollbar();
+            if(_searchTerm != SearchText.text)
             {
-                return;
+                // Update search term
+                SearchText.text = _searchTerm;
+                ExecuteSearch();
+            }else
+            {
+                // Sync search result length
+                ShowMoreSongs();
+                ShowMoreArtists();
             }
-            SearchText.text = _searchTerm;
-            ExecuteSearch();
+            
+        }
+
+        void UpdateScrollbar()
+        {
+            ScrollbarSearch.verticalNormalizedPosition = _scrollSearch;
+            ScrollbarPlaylist.verticalNormalizedPosition = _scrollPlaylist;
+        }
+
+        public override void OnOwnershipTransferred(VRCPlayerApi player)
+        {
+            Debug.Log("[YT Tablet] New Owner: " + player.displayName);
         }
 
         void UpdatePlaylist()
         {
+            UpdatePlaylistAnimator();
+            // enable / disable buttons
+            if(_localPlaylistLength != _playlistLength)
+            {
+                for(int i = _playlistLength; i < _localPlaylistLength; i++)
+                {
+                    _playlistButtons[i].gameObject.SetActive(false);
+                }
+                for(int i = _localPlaylistLength; i < _playlistLength; i++)
+                {
+                    _playlistButtons[i].gameObject.SetActive(true);
+                }
+                _localPlaylistLength = _playlistLength;
+                _scrollPlaylist = ScrollbarPlaylist.verticalNormalizedPosition; // update scroll position after size change
+            }
+            // update values
             for(int i = 0;i < _playlistLength; i++)
             {
-                if(_playlistButtons[i] == null)
-                {
-                    _playlistButtons[i] = Instantiate(SongButtonPrefab.gameObject, PlaylistContainer).GetComponent<YT_SongButton>();
-                    _playlistButtons[i].gameObject.SetActive(true);
-                    _localPlaylistIndex[i] = -1;
-                }
                 if(_localPlaylistIndex[i] != _playlist[i])
                 {
                     _localPlaylistIndex[i] = _playlist[i];
@@ -113,14 +197,17 @@ namespace Thry.YTDB
             }
         }
 
-        public void ShowPlaylist()
+        void UpdatePlaylistAnimator()
         {
-            PaylistAnimator.SetTrigger("show");
+            PlaylistAnimator.SetBool("IsOpen", _isPlaylistOpen);
         }
 
-        public void HidePlaylist()
+        public void TogglePlaylist()
         {
-            PaylistAnimator.SetTrigger("hide");
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            _isPlaylistOpen = !_isPlaylistOpen;
+            UpdatePlaylistAnimator();
+            RequestSerialization();
         }
 
         // ===================== Search =====================
@@ -153,64 +240,94 @@ namespace Thry.YTDB
             songsOffset = 0;
             artistsOffset = 0;
 
+            local_search_artists_loadSteps = 0;
+            local_search_song_loadSteps = 0;
+
             ArtistsContainer.parent.gameObject.SetActive(_resultsArtists[0] > 0);
             SongsContainer.parent.gameObject.SetActive(_resultsSongs[0] > 0);
 
+            // Search result length syncing
+            if(Networking.IsOwner(gameObject))
+            {
+                search_songs_loadSteps = 1;
+                search_artists_loadSteps = 1;
+                RequestSerialization();
+            }
+
             ShowMoreArtists();
             ShowMoreSongs();
-
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(HidePlaylist));
         }
 
         void ShowMoreSongs()
         {
+            if(local_search_song_loadSteps >= search_songs_loadSteps) return; // Search result length syncing
+
             bool isArtistSearch = _searchTerm.StartsWith("artist:");
-            for(int i = _resultsSongs[1] + songsOffset; i < _resultsSongs[2] && i < _resultsSongs[1] + songsOffset + LOAD_STEPS; i++)
+            int listIndex = songsOffset;
+            for(int i = _resultsSongs[1] + songsOffset; i < _resultsSongs[2] && i < _resultsSongs[1] + songsOffset + SONGS_PER_LOAD_STEP; i++)
             {
                 int index = i;
                 if(isArtistSearch) index = _db.GetSongIdFromAristIndices(index);
-                CardPrefab.Setup(SongsContainer, _db.GetSongName(index), _db.GetSongArtist(index), true, _db.GetSongURL(index), 
-                    _self, nameof(OnSongEqueue), nameof(param_OnSongEqueue), index,
-                    _self, nameof(OnSongShuffle), nameof(param_OnSongPlay), index);
+                ListItemPrefab.Setup(SongsContainer, listIndex, index, _db.GetSongName(index), _db.GetSongArtist(index), _db.GetSongLengthString(index));
+                listIndex++;
             }
-            songsOffset += LOAD_STEPS;
-            AdjustContainerHeight(SongsContainer, Mathf.Min(_resultsSongs[0], songsOffset));
+            songsOffset += SONGS_PER_LOAD_STEP;
+            AdjustContainerHeight(SongsContainer, Mathf.Min(_resultsSongs[0], songsOffset), 1, 80, 5);
             ButtonSongsShowMore.SetActive(songsOffset < _resultsSongs[0]);
+
+            // Search result length syncing. Check done after call to handle value changing between frames
+            local_search_song_loadSteps = songsOffset / SONGS_PER_LOAD_STEP;
+            SendCustomEventDelayedFrames(nameof(ShowMoreSongs), 1);
+            
+            _scrollSearch = ScrollbarSearch.verticalNormalizedPosition; // update scroll position after size change
         }
 
         void ShowMoreArtists()
         {
-            for(int i = _resultsArtists[1] + artistsOffset; i < _resultsArtists[2] && i < _resultsArtists[1] + artistsOffset + LOAD_STEPS; i++)
+            if(local_search_artists_loadSteps >= search_artists_loadSteps) return; // Search result length syncing
+
+            for(int i = _resultsArtists[1] + artistsOffset; i < _resultsArtists[2] && i < _resultsArtists[1] + artistsOffset + ARTISTS_PER_LOAD_STEP; i++)
             {
-                string artist = _db.GetArtist(i);
-                int[] songs = _db.SearchByArtist(artist);
-                VRCUrl thumbnailUrl = _db.GetSongURL(_db.GetSongIdFromAristIndices(UnityEngine.Random.Range(songs[1], songs[2])));
-                CardPrefab.Setup(ArtistsContainer, artist, "Artist", false, thumbnailUrl, 
+                string artist = _db.GetArtistName(i);
+                CardPrefab.Setup(ArtistsContainer, artist, "Artist", false, i, 
                     _self, nameof(OnArtistSelected), nameof(param_OnArtistSelected), i,
                     null, null, null, null);
             }
-            artistsOffset += LOAD_STEPS;
-            AdjustContainerHeight(ArtistsContainer, Mathf.Min(_resultsArtists[0], artistsOffset));
+            artistsOffset += ARTISTS_PER_LOAD_STEP;
+            AdjustContainerHeight(ArtistsContainer, Mathf.Min(_resultsArtists[0], artistsOffset), 5, 300, 30);
             ButtonArtistsShowMore.SetActive(artistsOffset < _resultsArtists[0]);
+
+            // Search result length syncing. Check done after call to handle value changing between frames
+            local_search_artists_loadSteps = artistsOffset / ARTISTS_PER_LOAD_STEP;
+            SendCustomEventDelayedFrames(nameof(ShowMoreArtists), 1);
+
+            _scrollSearch = ScrollbarSearch.verticalNormalizedPosition; // update scroll position after size change
         }
 
         public void LoadMoreSongs()
         {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            search_songs_loadSteps++;
             ShowMoreSongs();
+            RequestSerialization();
         }
 
         public void LoadMoreArtists()
         {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            search_artists_loadSteps++;
             ShowMoreArtists();
+            RequestSerialization();
         }
 
-        void AdjustContainerHeight(Transform contrainer, int elmCount)
+        void AdjustContainerHeight(Transform contrainer, int elmCount, int countPerRow, int heightPerElm, int spacing)
         {
-            int height = (int)((elmCount + 3) / 4);
+            int rowCount = (int)((elmCount + countPerRow - 1) / countPerRow);
             RectTransform rect = contrainer.GetComponent<RectTransform>();
-            rect.sizeDelta = new Vector2(rect.sizeDelta.x, height * 300);
+            rect.sizeDelta = new Vector2(rect.sizeDelta.x, rowCount * heightPerElm + Mathf.Max(0, rowCount - 1) * spacing);
 
             rect = contrainer.parent.GetComponent<RectTransform>();
+            int height = 0;
             foreach(Transform child in contrainer.parent)
             {
                 height += (int)child.GetComponent<RectTransform>().sizeDelta.y;
@@ -222,7 +339,7 @@ namespace Thry.YTDB
         [HideInInspector] public int param_OnArtistSelected;
         public void OnArtistSelected()
         {
-            string name = _db.GetArtist(param_OnArtistSelected);
+            string name = _db.GetArtistName(param_OnArtistSelected);
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
             _searchTerm = "artist: " + name;
             SearchText.text = _searchTerm;
@@ -230,17 +347,29 @@ namespace Thry.YTDB
             ExecuteSearch();
         }
 
-        [HideInInspector] public int param_OnSongPlay;
+        [HideInInspector] public int param_OnSongShuffle;
         public void OnSongShuffle()
         {
-            PlayAndStartNewPlaylist(param_OnSongPlay);
-            SendCustomNetworkEvent(VRC.Udon.Common.Interfaces.NetworkEventTarget.All, nameof(ShowPlaylist));
+            _isPlaylistOpen = true;
+            PlayAndStartNewPlaylist(param_OnSongShuffle);
         }
 
         [HideInInspector] public int param_OnSongEqueue;
         public void OnSongEqueue()
         {
             Enqueue(param_OnSongEqueue);
+        }
+
+        [HideInInspector] public int param_OnReplaceFirst;
+        public void OnReplaceFirst()
+        {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            if(_playlistLength == 0)
+            {
+                PlayAndStartNewPlaylist(param_OnReplaceFirst);
+                return;
+            }
+            ReplacePlaylistHead(param_OnReplaceFirst);
         }
 
         // ================== Play Functions ==================
@@ -307,23 +436,38 @@ namespace Thry.YTDB
                 }
             }
             if(earlistFreeUserIndex == -1) return;
-            // if song is already in playlist, move it to second position
-            if(playlistIndex >= 0 && earlistFreeUserIndex < playlistIndex)
+            // if song is already in playlist, move it to earlist position
+            if(playlistIndex >= 0)
             {
-                int temp = _playlist[earlistFreeUserIndex];
-                _playlist[earlistFreeUserIndex] = _playlist[playlistIndex];
-                _playlistIsUserRequest[earlistFreeUserIndex] = true;
-                _playlist[playlistIndex] = temp;
+                if(earlistFreeUserIndex < playlistIndex)
+                {
+                    int temp = _playlist[earlistFreeUserIndex];
+                    _playlist[earlistFreeUserIndex] = _playlist[playlistIndex];
+                    _playlistIsUserRequest[earlistFreeUserIndex] = true;
+                    _playlist[playlistIndex] = temp;
+                } 
             }else
             {
                 _playlist[earlistFreeUserIndex] = index;
                 _playlistIsUserRequest[earlistFreeUserIndex] = true;
+                if(earlistFreeUserIndex == _playlistLength)
+                {
+                    _playlistLength++;
+                }
             }
             // start playing if nothing is playing
             if(!_isPlaying)
             {
                 Next();
             }
+            UpdatePlaylist();
+            RequestSerialization();
+        }
+
+        void ReplacePlaylistHead(int newHead)
+        {
+            _playlist[0] = param_OnReplaceFirst;
+            Play(param_OnReplaceFirst);
             UpdatePlaylist();
             RequestSerialization();
         }
@@ -371,10 +515,12 @@ namespace Thry.YTDB
             for(int i = 0; i < _playlistLength; i++)
             {
                 _playlist[i] = _playlist[i + count];
+                _playlistIsUserRequest[i] = _playlistIsUserRequest[i + count];
             }
             for(int i = _playlistLength; i < PLAYLIST_AUTO_GEN_LENGTH; i++)
             {
                 _playlist[i] = _db.GetRandomRelated(_playlist[i - 1]);
+                _playlistIsUserRequest[i] = false;
             }
             _playlistLength = Mathf.Max(_playlistLength, PLAYLIST_AUTO_GEN_LENGTH);
             UpdatePlaylist();
