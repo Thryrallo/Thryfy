@@ -3,7 +3,7 @@ Thryfy is a youtube music song database with ~200.000 songs by 10.000 artist. It
 
 ## Thryfy is a video player extension
 The Prefab is made in way that it uses an adapter pattern to connect to video players.
-Currently the only implemented (an thus the only supported videoplayer) is [UdonSharp VideoPlayer(https://github.com/MerlinVR/USharpVideo]
+Currently the only implemented (an thus the only supported videoplayer) is [UdonSharp VideoPlayer](https://github.com/MerlinVR/USharpVideo)
 
 # Setup
 1. Drag YT_DB_Manager into project
