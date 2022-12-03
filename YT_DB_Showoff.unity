@@ -392,6 +392,7 @@ GameObject:
   - component: {fileID: 1126555594}
   - component: {fileID: 1126555593}
   - component: {fileID: 1126555592}
+  - component: {fileID: 1126555597}
   m_Layer: 0
   m_Name: VRC World
   m_TagString: Untagged
@@ -509,8 +510,8 @@ MonoBehaviour:
   useAssignedLayers: 0
   DynamicPrefabs: []
   DynamicMaterials:
-  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
   - {fileID: 2100000, guid: 4876fc9dc009bbe4493553020a561611, type: 2}
+  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
   - {fileID: 2100000, guid: 6b1cfb2b8f714224c993e4373ea2a53a, type: 2}
   - {fileID: 2100000, guid: 012ab75701ee4c7459babf30c1eea762, type: 2}
   - {fileID: 2100000, guid: b52212c7f6a886e40b907cc3b3e03ba2, type: 2}
@@ -588,8 +589,6 @@ MonoBehaviour:
     ID: 17
   - gameObject: {fileID: 1691759608}
     ID: 18
-  - gameObject: {fileID: 1473409680}
-    ID: 19
   - gameObject: {fileID: 1525850626}
     ID: 20
   - gameObject: {fileID: 1746297514}
@@ -630,6 +629,19 @@ Transform:
   m_Father: {fileID: 0}
   m_RootOrder: 5
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1126555597
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1126555591}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 229740497, guid: 4ecd63eff847044b68db9453ce219299, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  contentType: 1
 --- !u!1 &1143383388 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 6449255797609289872, guid: 4e1efea57d786dc469393e698480faa6,
@@ -734,12 +746,6 @@ GameObject:
 --- !u!1 &1310265924 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 6449255796944198179, guid: 4e1efea57d786dc469393e698480faa6,
-    type: 3}
-  m_PrefabInstance: {fileID: 44238796257289540}
-  m_PrefabAsset: {fileID: 0}
---- !u!1 &1473409680 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 44238794943296975, guid: 4e1efea57d786dc469393e698480faa6,
     type: 3}
   m_PrefabInstance: {fileID: 44238796257289540}
   m_PrefabAsset: {fileID: 0}
@@ -1125,12 +1131,12 @@ PrefabInstance:
     - target: {fileID: 6449255796833732737, guid: 4e1efea57d786dc469393e698480faa6,
         type: 3}
       propertyPath: m_RootOrder
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 6449255796961847560, guid: 4e1efea57d786dc469393e698480faa6,
         type: 3}
       propertyPath: m_RootOrder
-      value: 2
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 6449255797127008919, guid: 4e1efea57d786dc469393e698480faa6,
         type: 3}

@@ -416,13 +416,17 @@ namespace Thry.YTDB
         [HideInInspector] public int param_OnSongEqueue;
         public void OnSongEqueue()
         {
+            if(_playlistLength == 0)
+            {
+                PlayAndStartNewPlaylist(param_OnSongEqueue);
+                return;
+            }
             Enqueue(param_OnSongEqueue);
         }
 
         [HideInInspector] public int param_OnReplaceFirst;
         public void OnReplaceFirst()
         {
-            Networking.SetOwner(Networking.LocalPlayer, gameObject);
             if(_playlistLength == 0)
             {
                 PlayAndStartNewPlaylist(param_OnReplaceFirst);
