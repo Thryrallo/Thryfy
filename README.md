@@ -1,7 +1,7 @@
 # Thryfy
-Thryfy is a youtube music song database with ~200.000 songs by 10.000 artist. 
+Thryfy is a youtube music song database with ~200.000 songs by 10.000 artists. 
 - It allows you to search songs by name or artist.
-- Autocmaitcally creates a playlist based on your song choice.
+- Automatically creates a playlist based on your song choice.
 
 ## Thryfy is a video player extension
 The Prefab is made in way that it uses an adapter pattern to connect to video players.
