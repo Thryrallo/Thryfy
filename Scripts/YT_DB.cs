@@ -252,6 +252,28 @@ namespace Thry.YTDB
             return -1;
         }
 
+        public int[] LinearSearchSongContains(string term, int startIndex, int length, int maxResults)
+        {
+            term = term.ToLower();
+            int[] results = new int[maxResults];
+            int resultsCount = 0;
+            for(int i = startIndex; i < startIndex + length && i < _names.Length; i++)
+            {
+                if(_names[i].ToLower().Contains(term))
+                {
+                    results[resultsCount] = i;
+                    resultsCount++;
+                    if(resultsCount == maxResults)
+                    {
+                        break;
+                    }
+                }
+            }
+            int[] results2 = new int[resultsCount];
+            Array.Copy(results, results2, resultsCount);
+            return results2;
+        }
+
         public int GetSongIdFromAristIndices(int index)
         {
             return _artistToSongIndices_songIndices[index];
