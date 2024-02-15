@@ -65,11 +65,6 @@ namespace Thry.YTDB
         {
             Thumbnail.texture = rt;
         }
-
-        public int GetSongIndex()
-        {
-            return _songIndex;
-        }
     }
 
 }

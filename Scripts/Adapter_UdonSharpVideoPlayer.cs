@@ -33,6 +33,7 @@ namespace Thry.YTDB
         {
             if(VideoPlayer != null)
             {
+                Networking.SetOwner(Networking.LocalPlayer, VideoPlayer.gameObject);
                 VideoPlayer.SetPaused(true);
             }
         }
@@ -41,6 +42,7 @@ namespace Thry.YTDB
         {
             if(VideoPlayer != null)
             {
+                Networking.SetOwner(Networking.LocalPlayer, VideoPlayer.gameObject);
                 VideoPlayer.SetPaused(false);
             }
         }
@@ -60,7 +62,7 @@ namespace Thry.YTDB
 
         public void UpdateVolumeFromVideoPlayer()
         {
-            Tablet.SetVolume(VideoPlayer.GetVolume());
+            Tablet.SetVolume(VideoPlayer.GetVolume(), false);
         }
 
         public void ForceVideoSync()
@@ -95,8 +97,6 @@ namespace Thry.YTDB
             if(_isRateLimited != isRateLimited)
             {
                 _isRateLimited = isRateLimited;
-                if(_isRateLimited)
-                    Tablet.ThubmnailLoader.TimeoutReqeusts(5.7f); // usharp retry time is 5.5s
             }
             UpdateVolumeFromVideoPlayer();
             SendCustomEventDelayedSeconds(nameof(SlowUpdate), 0.15f);

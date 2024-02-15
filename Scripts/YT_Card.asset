@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c333ccfdd0cbdbc4ca30cef2dd6e6b9b, type: 3}
   m_Name: YT_Card
   m_EditorClassIdentifier: 
-  serializedUdonProgramAsset: {fileID: 11400000, guid: c8f1799b6bcc096438a56f41f9bc84f2,
+  serializedUdonProgramAsset: {fileID: 11400000, guid: 1abdaf5d4cac11c42aae8683745c01ca,
     type: 2}
   udonAssembly: 
   assemblyError: 

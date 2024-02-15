@@ -2,20 +2,25 @@
 using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
-using VRC.Udon;
 using System;
+
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
 using UdonSharpEditor;
+using UnityEditor;
+using UnityEditor.Callbacks;
 #endif
 
 namespace Thry.YTDB
 {
     [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
-    public partial class YT_DB : UdonSharpBehaviour
+    public class YT_DB : UdonSharpBehaviour
     {
+        public bool LOAD_IN_PLAYMODE;
         // data is sorted by name in alphabetical order
-        string[] _names;
-        string[] _artists;
+        [SerializeField, HideInInspector] private string[] _names;
+        [SerializeField, HideInInspector] private string[] _artists;
+
+        [SerializeField, HideInInspector] private VRCUrl[] _artistUrls;
         [SerializeField, HideInInspector] private VRCUrl[] _urls;
         [SerializeField, HideInInspector] private int[] _artistIndices;
         [SerializeField, HideInInspector] private int[] _related; // 5 per song
@@ -23,23 +28,6 @@ namespace Thry.YTDB
 
         [SerializeField, HideInInspector] private int[] _artistToSongIndices_artistIds;
         [SerializeField, HideInInspector] private int[] _artistToSongIndices_songIndices;
-        [SerializeField, HideInInspector] private TextAsset _songAsset;
-        [SerializeField, HideInInspector] private TextAsset _artistAsset;
-
-        bool _isLoaded;
-
-        private void Start() 
-        {
-            LoadAssets();
-        }
-
-        public void LoadAssets()
-        {
-            if(_isLoaded) return;
-            _names = _songAsset.text.Split('\n');
-            _artists = _artistAsset.text.Split('\n');
-            _isLoaded = true;
-        }
 
         public int[] SearchByName(string name)
         {
@@ -68,8 +56,9 @@ namespace Thry.YTDB
             {
                 int mid = (min + max) / 2;
                 string midVal = ar[mid].ToLower();
-                int cmp = midVal.CompareTo(term);
-                bool match = midVal.StartsWith(term);
+                //int cmp = midVal.CompareTo(term);
+                int cmp = string.CompareOrdinal(midVal, term);
+                bool match = midVal.StartsWith(term, StringComparison.Ordinal);
                 if (cmp == 0 || match)
                 {
                     int minIndex = BinarySearchMin(ar, term, min, max, mid);
@@ -99,11 +88,11 @@ namespace Thry.YTDB
             {
                 mid = (min + max) / 2;
                 string midVal = ar[mid].ToLower();
-                int cmp = midVal.CompareTo(term);
-                bool match = midVal.StartsWith(term);
+                int cmp = string.CompareOrdinal(midVal, term);
+                bool match = midVal.StartsWith(term, StringComparison.Ordinal);
                 if (cmp == 0 || match)
                 {
-                    if(mid == 0 || !ar[mid - 1].ToLower().StartsWith(term))
+                    if(mid == 0 || !ar[mid - 1].ToLower().StartsWith(term, StringComparison.Ordinal))
                     {
                         return mid;
                     }
@@ -130,11 +119,11 @@ namespace Thry.YTDB
             {
                 mid = (min + max) / 2;
                 string midVal = ar[mid].ToLower();
-                int cmp = midVal.CompareTo(term);
-                bool match = midVal.StartsWith(term);
+                int cmp = string.CompareOrdinal(midVal, term);
+                bool match = midVal.StartsWith(term, StringComparison.Ordinal);
                 if (cmp == 0 || match)
                 {
-                    if(mid == ar.Length - 1 || !ar[mid + 1].ToLower().StartsWith(term))
+                    if(mid == ar.Length - 1 || !ar[mid + 1].ToLower().StartsWith(term, StringComparison.Ordinal))
                     {
                         return mid;
                     }
@@ -252,28 +241,6 @@ namespace Thry.YTDB
             return -1;
         }
 
-        public int[] LinearSearchSongContains(string term, int startIndex, int length, int maxResults)
-        {
-            term = term.ToLower();
-            int[] results = new int[maxResults];
-            int resultsCount = 0;
-            for(int i = startIndex; i < startIndex + length && i < _names.Length; i++)
-            {
-                if(_names[i].ToLower().Contains(term))
-                {
-                    results[resultsCount] = i;
-                    resultsCount++;
-                    if(resultsCount == maxResults)
-                    {
-                        break;
-                    }
-                }
-            }
-            int[] results2 = new int[resultsCount];
-            Array.Copy(results, results2, resultsCount);
-            return results2;
-        }
-
         public int GetSongIdFromAristIndices(int index)
         {
             return _artistToSongIndices_songIndices[index];
@@ -357,6 +324,11 @@ namespace Thry.YTDB
             return _artists[index];
         }
 
+        public VRCUrl GetArtistURL(int index)
+        {
+            return _artistUrls[index];
+        }
+
         public int GetSongCount()
         {
             return _names.Length;
@@ -368,89 +340,147 @@ namespace Thry.YTDB
         }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-        public YT_DB_Save Save()
+
+        class Song
         {
-            YT_DB_Save save = ScriptableObject.CreateInstance<YT_DB_Save>();
-            save.names = this._names;
-            save.urls = this._urls;
-            save.artistIndices = this._artistIndices;
-            save.related = this._related;
-            save.artists = this._artists;
-            save.artistToSongIndices_artistIds = this._artistToSongIndices_artistIds;
-            save.artistToSongIndices_songIndices = this._artistToSongIndices_songIndices;
-            return save;
-        }
-        public void Load(YT_DB_Save save)
-        {
-            this._names = save.names;
-            this._urls = save.urls;
-            this._artistIndices = save.artistIndices;
-            this._related = save.related;
-            this._artists = save.artists;
-            this._artistToSongIndices_artistIds = save.artistToSongIndices_artistIds;
-            this._artistToSongIndices_songIndices = save.artistToSongIndices_songIndices;
+            public string sortName;
+            public string sortArtist;
+            public string name;
+            public string artists;
+            public string artist;
+            public string id;
+            public string[] related;
+            public int index;
+            public ushort length;
+            public int views;
         }
 
-        public void SetDataArrays(string[] names, VRCUrl[] urls, int[] artistIndices, int[] related, string[] artists, ushort[] length)
+        public class BuildHook
         {
-            _names = names;
-            _urls = urls;
-            _artists = artists;
-            _artistIndices = artistIndices;
-            _related = related;
-            _length = length;
-        }
 
-        public void SetArtistToIndicesArrays(int[] artistIds, int[] songIndices)
-        {
-            _artistToSongIndices_artistIds = artistIds;
-            _artistToSongIndices_songIndices = songIndices;
-        }
+            [InitializeOnLoadMethod]
+            public static void PlayModeStateChangedHook()
+            {
+                EditorApplication.playModeStateChanged += OnPlayModeChanged;
+            }
 
-        public void SetAssets(TextAsset songsAsset, TextAsset artistsAsset)
-        {
-            _songAsset = songsAsset;
-            _artistAsset = artistsAsset;
-        }
+            private static void OnPlayModeChanged(PlayModeStateChange state)
+            {
+                if (state == PlayModeStateChange.ExitingEditMode)
+                {
+                    YT_DB yt_db = GameObject.FindObjectOfType<YT_DB>();
+                    if (yt_db && yt_db.LOAD_IN_PLAYMODE)
+                        PrepareDB();
+                }else if(state == PlayModeStateChange.EnteredEditMode)
+                {
+                    ClearDB();
+                }
 
-        public string[] GetNames()
-        {
-            return _names;
-        }
+            }
+            
+            [PostProcessSceneAttribute(-10)]
+            public static void OnPostprocessScene()
+            {
+                PrepareDB();
+            }
 
-        public VRCUrl[] GetUrls()
-        {
-            return _urls;
-        }
+            private static void ClearDB()
+            {
+                Debug.Log("[YT_DB] Clearing YT_DB");
+                YT_DB yt_db = GameObject.FindObjectOfType<YT_DB>();
+                if (yt_db == null)
+                {
+                    return;
+                }
+                yt_db._names = new string[0];
+                yt_db._artists = new string[0];
+                yt_db._artistIndices = new int[0];
+                yt_db._artistToSongIndices_artistIds = new int[0];
+                yt_db._artistToSongIndices_songIndices = new int[0];
+                yt_db._urls = new VRCUrl[0];
+                yt_db._length = new ushort[0];
+                yt_db._related = new int[0];
+                yt_db._artistUrls = new VRCUrl[0];
 
-        public int[] GetArtistIndices()
-        {
-            return _artistIndices;
-        }
+                UdonSharpEditorUtility.CopyProxyToUdon(yt_db);
+            }
 
-        public int[] GetRelated()
-        {
-            return _related;
-        }
+            private static bool PrepareDB()
+            {
+                // Find YT_DB in scene
+                YT_DB yt_db = GameObject.FindObjectOfType<YT_DB>();
+                if (yt_db == null)
+                {
+                    return true;
+                }
 
-        public string[] GetArtists()
-        {
-            return _artists;
-        }
+                Debug.Log("[YT_DB] Building YT_DB");
 
-        public int[] GetArtistToSongIndicesArtistIndices()
-        {
-            return _artistToSongIndices_artistIds;
-        }
+                // find yt_songs.txt
+                string[] guids = AssetDatabase.FindAssets("t:TextAsset yt_songs");
+                if (guids.Length == 0)
+                {
+                    Debug.LogError("YT_DB: yt_songs.txt not found");
+                    return false;
+                }
+                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                TextAsset songsAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(path);
+                guids = AssetDatabase.FindAssets("t:TextAsset yt_artists");
+                if (guids.Length == 0)
+                {
+                    Debug.LogError("YT_DB: yt_artists.txt not found");
+                    return false;
+                }
+                path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                TextAsset artistsAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(path);
 
-        public int[] GetArtistToSongIndicesSongIndices()
-        {
-            return _artistToSongIndices_songIndices;
-        }
+                // Load Artists
+                string[] artist_lines = artistsAsset.text.Split('\n');
+                string[] song_lines = songsAsset.text.Split('\n');
+                yt_db._artists = new string[artist_lines.Length];
+                yt_db._artistUrls = new VRCUrl[artist_lines.Length];
+                yt_db._artistToSongIndices_artistIds = new int[song_lines.Length];
+                yt_db._artistToSongIndices_songIndices = new int[song_lines.Length];
+                int artistToSongIndicesIndex = 0;
+                for (int i = 0; i < artist_lines.Length; i++)
+                {
+                    string[] parts = artist_lines[i].Split(';');
+                    yt_db._artists[i] = parts[0];
+                    yt_db._artistUrls[i] = new VRCUrl($"https://img.youtube.com/vi/{parts[1]}/0.jpg");
+                    int[] songIndices = Array.ConvertAll(parts[2].Split(','), int.Parse);
+                    Array.Copy(songIndices, 0, yt_db._artistToSongIndices_songIndices, artistToSongIndicesIndex, songIndices.Length);
+                    Array.Fill(yt_db._artistToSongIndices_artistIds, i, artistToSongIndicesIndex, songIndices.Length);
+                    artistToSongIndicesIndex += songIndices.Length;
+                }
 
-        public (string name, VRCUrl id, string artist, int[] related) GetSong(int index)
-        {
-            return (GetSongName(index), GetSongURL(index), GetSongArtist(index), GetSongRelated(index));
+                // Load Songs
+                yt_db._names = new string[song_lines.Length];
+                yt_db._urls = new VRCUrl[song_lines.Length];
+                yt_db._artistIndices = new int[song_lines.Length];
+                yt_db._related = new int[song_lines.Length * 5];
+                yt_db._length = new ushort[song_lines.Length];
+
+                for (int i = 0; i < song_lines.Length; i++)
+                {
+                    if (i % 100 == 0)
+                        EditorUtility.DisplayProgressBar("YT_DB", "Loading Data", (float)i / song_lines.Length);
+                    string[] parts = song_lines[i].Split(';');
+                    yt_db._urls[i] = new VRCUrl("https://youtu.be/" + parts[0]);
+                    yt_db._names[i] = parts[1];
+                    yt_db._artistIndices[i] = int.Parse(parts[2]);
+                    yt_db._length[i] = ushort.Parse(parts[3]);
+                    yt_db._related[i * 5 + 0] = int.Parse(parts[4]);
+                    yt_db._related[i * 5 + 1] = int.Parse(parts[5]);
+                    yt_db._related[i * 5 + 2] = int.Parse(parts[6]);
+                    yt_db._related[i * 5 + 3] = int.Parse(parts[7]);
+                    yt_db._related[i * 5 + 4] = int.Parse(parts[8]);
+                }
+
+                EditorUtility.ClearProgressBar();
+                UdonSharpEditorUtility.CopyProxyToUdon(yt_db);
+
+                return true;
+            }
         }
 #endif
     }

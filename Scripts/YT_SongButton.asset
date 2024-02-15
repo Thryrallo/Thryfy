@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c333ccfdd0cbdbc4ca30cef2dd6e6b9b, type: 3}
   m_Name: YT_SongButton
   m_EditorClassIdentifier: 
-  serializedUdonProgramAsset: {fileID: 11400000, guid: 54786411da41ce24c86731e67ff85105,
+  serializedUdonProgramAsset: {fileID: 11400000, guid: 5aaa7f6d09ea7dd4a9af4f6afb4b2757,
     type: 2}
   udonAssembly: 
   assemblyError: 

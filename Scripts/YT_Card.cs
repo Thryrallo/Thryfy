@@ -1,6 +1,8 @@
 ﻿
+using System;
 using UdonSharp;
 using UnityEngine;
+using VRC.SDK3.Image;
 using VRC.SDKBase;
 using VRC.Udon;
 
@@ -50,13 +52,24 @@ namespace Thry.YTDB
             card._callbackSecondaryField = callbackSecondaryField;
             card._callbackSecondaryValue = callbackSecondaryValue;
             card.SecondaryButton.gameObject.SetActive(callbackSecondaryBehaviour != null);
-            if(artistId > -1) card.Thumbnail.texture = ThumbnailLoaderManager.GetTexture(artistId);
+            if(artistId > -1) ThumbnailLoaderManager.RequestTexture(artistId, card.GetComponent<UdonBehaviour>());
             instance.SetActive(true);
+        }
+
+        public override void OnImageLoadSuccess(IVRCImageDownload result)
+        {
+            Debug.Log("OnImageLoadSuccess " + result.Url);
+            if (result.State == VRCImageDownloadState.Complete)
+            {
+                this.Thumbnail.texture = result.Result;
+                // youtube thumbnails have a border. scale the texture rect to remove it
+                this.Thumbnail.rectTransform.localScale = Vector3.one * 1.35f;
+            }
         }
 
         private void OnDestroy() 
         {
-            if(_artistId > -1) ThumbnailLoaderManager.UnregisterUse(_artistId);
+            //if(_artistId > -1) ThumbnailLoaderManager.UnregisterUse(_artistId);
         }
 
         public void OnPrimary()

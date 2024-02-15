@@ -1,5 +1,7 @@
 ﻿
+using JetBrains.Annotations;
 using System;
+using Thry.Udon.PrivateRoom;
 using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
@@ -14,31 +16,30 @@ namespace Thry.YTDB
         const int PLAYLIST_AUTO_GEN_LENGTH = 10;
         const int MAX_PLAYLIST_LENGTH = 100;
         const int SONGS_PER_LOAD_STEP = 20;
-        const int ARTISTS_PER_LOAD_STEP = 4;
-        const int SLOW_SEARCH_RESULTS = 100;
-        const int SLOW_SEARCH_LOOKUPS_PER_SECOND = 20000; // 20k lookups per second -> 10s for 200k lookups
+        const int ARTISTS_PER_LOAD_STEP = 5;
 
         [Header("On Setup")]
-        public YT_DB_Manager DatabaseManager;
+        public YT_DB Database;
         public UdonBehaviour Adapter;
 
         [Space(50)]
 
-        public string InitialSearch = "Taylor";
+        public string InitialSong = "\"Slut!";
         public Animator LoadBarAnimator;
         public Animator PlaylistAnimator;
-        public ThumbnailLoader ThubmnailLoader;
         public YT_Card CardPrefab;
         public YT_SongButton SongButtonPrefab;
         public Transform SongsContainer;
         public Transform ArtistsContainer;
         public GameObject ButtonSongsShowMore;
         public GameObject ButtonArtistsShowMore;
-        public GameObject ButtonDeepSearch;
-        public UnityEngine.UI.InputField SearchText;
+        public VRC.SDK3.Components.VRCUrlInputField SearchField;
+        public Text SearchFieldOverwritePlaceholder;
+        public Text SearchFieldOverwriteText;
         public VRC.SDK3.Components.VRCUrlInputField CustomUrlField;
         public UnityEngine.UI.Slider VolumeSlider;
-        public GameObject ButtonTakeControl;
+        public Image LogoIcon;
+        public Color InControlColor;
 
         public ScrollRect ScrollbarSearch;
         public ScrollRect ScrollbarPlaylist;
@@ -50,6 +51,9 @@ namespace Thry.YTDB
 
         public Transform PlaylistContainer;
 
+        public Image VolumeIcon;
+        public Sprite[] VolumeSprites;
+
         [HideInInspector]
         [UdonSynced] public VRCUrl VideoUrl;
 
@@ -58,51 +62,57 @@ namespace Thry.YTDB
         [UdonSynced] int[] _playlist = new int[MAX_PLAYLIST_LENGTH];
         [UdonSynced] bool[] _playlistIsUserRequest = new bool[MAX_PLAYLIST_LENGTH];
         [UdonSynced] string[] _playlistRequestedBy = new string[MAX_PLAYLIST_LENGTH];
+        [UdonSynced] VRCUrl[] _playlistCustomURL = new VRCUrl[MAX_PLAYLIST_LENGTH];
         [UdonSynced] int _playlistLength = 0;
-        [UdonSynced] int[] _previousSongs = new int[100];
+        [UdonSynced] int[] _previousSongs = new int[MAX_PLAYLIST_LENGTH];
+        [UdonSynced] VRCUrl[] _previousUrls = new VRCUrl[MAX_PLAYLIST_LENGTH];
         [UdonSynced] int _previousSongsHead = 0;
         [UdonSynced] int _previousSongsTail = 0;
         int[] _localPlaylistIndex = new int[MAX_PLAYLIST_LENGTH];
         int _localPlaylistLength = 0;
-        [UdonSynced] int _currentSongIndex = -1;
 
         [UdonSynced] bool _isPlaylistOpen = false;
 
-        [UdonSynced] float _scrollPlaylist = 0.0f;
-        [UdonSynced] float _scrollSearch = 0.0f;
+        [UdonSynced] float _scrollPlaylistAbsolute = 0.0f;
+        [UdonSynced] float _scrollSearchAbsolute = 0.0f;
+
+        float _lastPlaylistScrollHeight = 0;
+        float _lastSearchScrollHeight = 0;
+        
+        bool _supressFirstPlaylistScroll = true;
+        bool _supressFirstSearchScroll = true;
+
+        bool _supressScrollPlaylist = false;
+        bool _supressScrollSearch = false;
+
+        //bool _supressPlaylistScrollCallback = false;
+        //bool _supressPlaylistSearchCallback = false;
 
         [UdonSynced] int _search_songs_loadSteps = 0;
         int _local_search_song_loadSteps = 0;
         [UdonSynced] int _search_artists_loadSteps = 0;
         int _local_search_artists_loadSteps = 0;
-        [UdonSynced] int [] _syncedSongSearchResults = new int[0];
-        [UdonSynced] bool _useSyncedSongSearchResults = false;
-        bool _localUseSyncedSongSearchResults = false;
-        int _slowSearch_lastSearchSongIndex = 0;
-        int _slowSearch_resultCount = 0;
-        bool _isSlowSearching;
 
         int[] _resultsSongs = new int[]{ 0, 0, 0};
         int[] _resultsArtists = new int[]{ 0, 0, 0};
         int _songsOffset = 0;
         int _artistsOffset = 0;
         bool _isPlaying = false;
-        YT_DB _db;
         UdonBehaviour _self;
         YT_SongButton[] _playlistButtons = new YT_SongButton[MAX_PLAYLIST_LENGTH];
         int _skipCallCount = 0;
 
         float _volume;
+        float _preMuteVolume;
 
         private void Start() 
         {
-            _db = DatabaseManager.Database;
             _self = this.GetComponent<UdonBehaviour>();
             bool isOwner = Networking.IsOwner(gameObject);
-            ButtonTakeControl.SetActive(!isOwner);
-            if(isOwner)
+            LogoIcon.color = isOwner ? InControlColor : Color.white;
+            if (isOwner && !string.IsNullOrWhiteSpace(InitialSong))
             {
-                SendCustomEventDelayedFrames(nameof(SetInitalSearch), 1);
+                SendCustomEventDelayedFrames(nameof(CreateInitialQueue), 1);
             }
             for(int i = 0; i < MAX_PLAYLIST_LENGTH; i++)
             {
@@ -110,214 +120,378 @@ namespace Thry.YTDB
                 _playlistButtons[i] = Instantiate(SongButtonPrefab.gameObject, PlaylistContainer).GetComponent<YT_SongButton>();
                 _playlistButtons[i].gameObject.SetActive(false);
                 _localPlaylistIndex[i] = -1;
+                _playlistCustomURL[i] = VRCUrl.Empty;
+
+                _previousUrls[i] = VRCUrl.Empty;
+            }
+            ArtistsContainer.parent.gameObject.SetActive(false);
+            SongsContainer.parent.gameObject.SetActive(false);
+            ClearSearchObjects();
+            UpdateVolumeIcon();
+        }
+
+        public void CreateInitialQueue()
+        {
+            // Search for the initial song
+            int[] ids = Database.SearchByName(InitialSong);
+            if (ids[0] > 0)
+            {
+                PlayAndStartNewPlaylist(ids[1]);
+                TogglePlaylist();
             }
         }
 
-        private void Update() 
-        {
-            if(_isSlowSearching) 
-            {
-                SlowSearchNext();
-            }
-        }
 
-        public void SetInitalSearch()
-        {
-            SearchText.text = InitialSearch;
-            OnInputChanged();
-        }
-
-        public override void OnOwnershipTransferred(VRCPlayerApi player)
-        {
-            Debug.Log("[YT Tablet] New Owner: " + player.displayName);
-            ButtonTakeControl.SetActive(!player.isLocal);
-        }
-
-        public void OnInputChanged()
-        {
-            if(_searchTerm == SearchText.text)
-            {
-                return;
-            }
-
-            Networking.SetOwner(Networking.LocalPlayer, gameObject);
-            _searchTerm = SearchText.text;
-            _useSyncedSongSearchResults = false;
-
-            _isPlaylistOpen = false;
-            UpdatePlaylistAnimator();
-
-            RequestSerialization();
-            ExecuteSearch();
-        }
-
-        public void OnCustomUrlAdded()
-        {
-            Debug.Log("[YT Tablet] OnCustomUrlAdded");
-            VRCUrl newUrl = CustomUrlField.GetUrl();
-            if(newUrl != null && newUrl.Get() != "" && newUrl != VideoUrl)
-            {
-                ReplacePlaylistHeadWithCustom(newUrl);
-            }
-        }
-
-        public void OnSearchScrollbarChanged()
-        {
-            if(Networking.IsOwner(gameObject))
-            {
-                _scrollSearch = ScrollbarSearch.verticalNormalizedPosition;
-                RequestSerialization();
-            }else
-            {
-                UpdateScrollbar();
-            }
-        }
-
-        public void OnPlaylistScrollbarChanged()
-        {
-            if(Networking.IsOwner(gameObject))
-            {
-                _scrollPlaylist = ScrollbarPlaylist.verticalNormalizedPosition;
-                RequestSerialization();
-            }else
-            {
-                UpdateScrollbar();
-            }
-        }
-
-        public void OnVolumeChange()
-        {
-            _volume = VolumeSlider.value;
-            Adapter.SendCustomEvent("UpdateVolumeFromTablet");
-        }
-
-        public void SetVolume(float f)
-        {
-            _volume = f;	
-            VolumeSlider.value = f;
-        }
-
-        public float GetVolume()
-        {
-            return _volume;
-        }
-
-        public override void OnDeserialization()
-        {
-            // sync playlist
-            UpdatePlaylist();
-            // sync scrollbars
-            UpdateScrollbar();
-            if(_searchTerm != SearchText.text)
-            {
-                // Update search term
-                SearchText.text = _searchTerm;
-                ExecuteSearch();
-            }else
-            {
-                // Sync search result length
-                ShowSongs();
-                ShowLocalArtistSearch();
-            }
-            
-        }
-
-        void UpdateScrollbar()
-        {
-            ScrollbarSearch.verticalNormalizedPosition = _scrollSearch;
-            ScrollbarPlaylist.verticalNormalizedPosition = _scrollPlaylist;
-        }
-
-        void UpdatePlaylist()
-        {
-            UpdatePlaylistAnimator();
-            // enable / disable buttons
-            if(_localPlaylistLength != _playlistLength)
-            {
-                for(int i = _playlistLength; i < _localPlaylistLength; i++)
-                {
-                    _playlistButtons[i].gameObject.SetActive(false);
-                }
-                for(int i = _localPlaylistLength; i < _playlistLength; i++)
-                {
-                    _playlistButtons[i].gameObject.SetActive(true);
-                }
-                _localPlaylistLength = _playlistLength;
-                _scrollPlaylist = ScrollbarPlaylist.verticalNormalizedPosition; // update scroll position after size change
-            }
-            // update values
-            for(int i = 0;i < _playlistLength; i++)
-            {
-                if(_localPlaylistIndex[i] != _playlist[i])
-                {
-                    _localPlaylistIndex[i] = _playlist[i];
-                    if(_playlist[i] == -1)
-                    {
-                        _playlistButtons[i].Setup(this, -1, "Custom", "Unknown", _playlistRequestedBy[i], 0, i);
-                    }else
-                    {
-                        int songIndex = _playlist[i];
-                        _playlistButtons[i].Setup(this, songIndex, _db.GetSongName(songIndex), _db.GetSongArtist(songIndex), _playlistRequestedBy[i], _db.GetSongLength(songIndex), i);
-                    }
-                }
-            }
-        }
-
-        void UpdatePlaylistAnimator()
-        {
-            PlaylistAnimator.SetBool("IsOpen", _isPlaylistOpen);
-        }
-
+        [PublicAPI]
         public void TogglePlaylist()
         {
+            Debug.Log("[YT Tablet] TogglePlaylist");
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
             _isPlaylistOpen = !_isPlaylistOpen;
             UpdatePlaylistAnimator();
             RequestSerialization();
         }
 
+        [PublicAPI]
+        public void ForceVideoSync()
+        {
+            Adapter.SendCustomEvent("ForceVideoSync");
+        }
+
+        [PublicAPI]
         public void TakeControl()
         {
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
             Adapter.SendCustomEvent("TakeControl");
         }
 
-        public void ForceVideoSync()
+        // ===================== UI Callbacks =====================
+
+        public void OnSearchChanged()
         {
-            Adapter.SendCustomEvent("ForceVideoSync");
+            SetSearchField(SearchField.GetUrl().ToString());
         }
 
-        public void SwapToSlowSearch()
+        public void OnSearchSubmit()
         {
-            InitSlowSearch();
+            Debug.Log("[YT Tablet] OnInputChanged");
+            if (_searchTerm == SearchField.GetUrl().ToString())
+            {
+                return;
+            }
+
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            if(SearchField.GetUrl().ToString().StartsWith("http"))
+            {
+                // Add video to queue
+                Debug.Log("[YT Tablet] OnCustomUrlAdded");
+                VRCUrl newUrl = SearchField.GetUrl();
+                if (newUrl != null && newUrl != VideoUrl)
+                {
+                    EnqueueCustom(newUrl);
+                }
+            }
+            else
+            {
+                // Search
+                _searchTerm = SearchField.GetUrl().ToString();
+                SetSearchField();
+
+                _isPlaylistOpen = false;
+                UpdatePlaylistAnimator();
+
+                RequestSerialization();
+                ExecuteSearch();
+            }
+            
         }
+
+        private void SetSearchField()
+        {
+            SetSearchField(_searchTerm);
+        }
+        
+        private void SetSearchField(string s)
+        {
+            SearchFieldOverwritePlaceholder.enabled = s == "";
+            SearchFieldOverwriteText.enabled = s != "";
+            SearchFieldOverwriteText.text = s;
+        }
+
+        private string GetLocalSearchTerm()
+        {
+            return SearchFieldOverwriteText.text;
+        }
+
+        public void OnCustomUrlAdded()
+        {
+            Debug.Log("[YT Tablet] OnCustomUrlAdded");
+            VRCUrl newUrl = CustomUrlField.GetUrl();
+            if (newUrl != null && newUrl.Get() != "" && newUrl != VideoUrl)
+            {
+                ReplacePlaylistHeadWithCustom(newUrl);
+            }
+        }
+
+        float ScrollbarNormalizedToAbsolute(ScrollRect bar)
+        {
+            return (1 - bar.verticalNormalizedPosition) * (bar.content.rect.height - bar.viewport.rect.height);
+        }
+
+        float ScrollbarAbsoluteToNormalized(float absolute, ScrollRect bar)
+        {
+            return 1 - absolute / (bar.content.rect.height - bar.viewport.rect.height);
+        }
+
+        public void OnSearchScrollbarChanged()
+        {
+            if(_supressFirstSearchScroll || _supressFirstSearchScroll)
+            {
+                _supressFirstSearchScroll = false;
+                return;
+            }
+
+            float height = ScrollbarSearch.content.rect.height;
+            bool heightChanged = _lastSearchScrollHeight != height;
+            if (heightChanged)
+            {
+                Debug.Log($"[YT Tablet] OnSearchScrollbarChanged Height Changed {_lastSearchScrollHeight} {height}");
+                _lastSearchScrollHeight = height;
+                ScrollbarSearch.verticalNormalizedPosition = ScrollbarAbsoluteToNormalized(_scrollSearchAbsolute, ScrollbarSearch);
+                return;
+            }
+            float currentAbsolute = ScrollbarNormalizedToAbsolute(ScrollbarSearch);
+            bool wasUserInput = Math.Abs(_scrollSearchAbsolute - currentAbsolute) > 0.1f;
+            // scrollOutsideOfPossible: this happens when the search got shortend e.g. through joining a room with a long search list
+            bool scrollOutsideOfPossible = _scrollSearchAbsolute > height - ScrollbarSearch.viewport.rect.height;
+            Debug.Log($"[YT Tablet] OnSearchScrollbarChanged {wasUserInput} {!scrollOutsideOfPossible} {_scrollSearchAbsolute} {currentAbsolute}");
+
+            if (wasUserInput && !scrollOutsideOfPossible && Networking.LocalPlayer != null)
+            {
+                Networking.SetOwner(Networking.LocalPlayer, gameObject);
+                _scrollSearchAbsolute = currentAbsolute;
+                RequestSerialization();
+            }
+        }
+
+        public void OnPlaylistScrollbarChanged()
+        {
+            if(_supressFirstPlaylistScroll || _supressScrollPlaylist)
+            {
+                _supressFirstPlaylistScroll = false;
+                return;
+            }
+
+            float height = ScrollbarPlaylist.content.rect.height;
+            bool heightChanged = _lastPlaylistScrollHeight != height;
+            if (heightChanged)
+            {
+                Debug.Log($"[YT Tablet] OnPlaylistScrollbarChanged Height Changed {_lastPlaylistScrollHeight} {height}");
+                _lastPlaylistScrollHeight = height;
+                ScrollbarPlaylist.verticalNormalizedPosition = ScrollbarAbsoluteToNormalized(_scrollPlaylistAbsolute, ScrollbarPlaylist);
+                return;
+            }
+            float currentAbsolute = ScrollbarNormalizedToAbsolute(ScrollbarPlaylist);
+            bool wasUserInput = Math.Abs(_scrollPlaylistAbsolute - currentAbsolute) > 0.1f;
+            // scrollOutsideOfPossible: this happens when the playlist got shortend through a video being removed
+            bool scrollOutsideOfPossible = _scrollPlaylistAbsolute > height - ScrollbarPlaylist.viewport.rect.height; 
+            Debug.Log($"[YT Tablet] OnPlaylistScrollbarChanged {wasUserInput} {!scrollOutsideOfPossible} {_scrollPlaylistAbsolute} {currentAbsolute}");
+
+            if (wasUserInput && !scrollOutsideOfPossible && Networking.LocalPlayer != null)
+            {
+                Networking.SetOwner(Networking.LocalPlayer, gameObject);
+                _scrollPlaylistAbsolute = currentAbsolute;
+                RequestSerialization();
+            }
+        }
+
+        [PublicAPI]
+        public void SetVolume(float newVolume, bool updateVideoplayer)
+        {
+            if (_volume == newVolume) return;
+            _volume = newVolume;
+            
+            VolumeSlider.SetValueWithoutNotify(_volume);
+            UpdateVolumeIcon();
+
+            if (updateVideoplayer)
+                Adapter.SendCustomEvent("UpdateVolumeFromTablet");
+        }
+
+        [PublicAPI]
+        public float GetVolume()
+        {
+            return _volume;
+        }
+
+        public void OnVolumeChange()
+        {
+            float newVolume = VolumeSlider.value;
+            if (_volume > 0 && newVolume == 0)
+            {
+                _preMuteVolume = 0.5f;
+            }
+            SetVolume(newVolume, true);
+        }
+
+        public void ToggleMute()
+        {
+            bool isMuted = _volume == 0f;
+            isMuted = !isMuted;
+
+            if (isMuted)
+            {
+                _preMuteVolume = _volume;
+                SetVolume(0, true);
+            }
+            else
+            {
+                SetVolume(_preMuteVolume, true);
+            }
+        }
+
+        public void LoadMoreSongs()
+        {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            _search_songs_loadSteps++;
+            ShowMoreSongs();
+            RequestSerialization();
+        }
+
+        public void LoadMoreArtists()
+        {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            _search_artists_loadSteps++;
+            ShowMoreArtists();
+            RequestSerialization();
+        }
+
+        // ===================== Networking =====================
+
+        public override void OnOwnershipTransferred(VRCPlayerApi player)
+        {
+            Debug.Log("[YT Tablet] New Owner: " + player.displayName);
+            LogoIcon.color = player.isLocal ? InControlColor : Color.white;
+        }
+
+        public override void OnDeserialization()
+        {
+            Debug.Log("[YT Tablet] OnDeserialization");
+            // sync scrollbars
+            UpdateScrollbars();
+            // sync playlist
+            UpdatePlaylist();
+            // sync scrollbars
+            UpdateScrollbars();
+            if (_searchTerm != GetLocalSearchTerm())
+            {
+                // Update search term
+                SetSearchField();
+                ExecuteSearch();
+            }
+            else
+            {
+                // Sync search result length
+                ShowMoreSongs();
+                ShowMoreArtists();
+            }
+
+        }
+
+
+        // ===================== Internals =====================
+
+        void UpdateVolumeIcon()
+        {
+            if (_volume == 0)
+                VolumeIcon.sprite = VolumeSprites[0];
+            else if (_volume < 0.1f)
+                VolumeIcon.sprite = VolumeSprites[1];
+            else if (_volume < 0.5f)
+                VolumeIcon.sprite = VolumeSprites[2];
+            else
+                VolumeIcon.sprite = VolumeSprites[3];
+        }
+
+        void UpdatePlaylistAnimator()
+        {
+            PlaylistAnimator.SetBool("IsOpen", _isPlaylistOpen);
+        }
+        
+        void UpdateScrollbars()
+        {
+            Debug.Log("[YT Tablet] UpdateScrollbars");
+            _supressScrollPlaylist = true;
+            _supressScrollPlaylist = true;
+            ScrollbarSearch.verticalNormalizedPosition = ScrollbarAbsoluteToNormalized(_scrollSearchAbsolute, ScrollbarSearch);
+            ScrollbarPlaylist.verticalNormalizedPosition = ScrollbarAbsoluteToNormalized(_scrollPlaylistAbsolute, ScrollbarPlaylist);
+            _supressScrollPlaylist = false;
+            _supressScrollPlaylist = false;
+        }
+
+        void UpdatePlaylist()
+        {
+            Debug.Log("[YT Tablet] UpdatePlaylist");
+            UpdatePlaylistAnimator();
+            // enable / disable buttons
+            if (_localPlaylistLength != _playlistLength)
+            {
+                for (int i = _playlistLength; i < _localPlaylistLength; i++)
+                {
+                    _playlistButtons[i].gameObject.SetActive(false);
+                }
+                for (int i = _localPlaylistLength; i < _playlistLength; i++)
+                {
+                    _playlistButtons[i].gameObject.SetActive(true);
+                }
+                _localPlaylistLength = _playlistLength;
+                _scrollPlaylistAbsolute = ScrollbarNormalizedToAbsolute(ScrollbarPlaylist);
+            }
+            // update values
+            for (int i = 0; i < _playlistLength; i++)
+            {
+                if (_localPlaylistIndex[i] != _playlist[i] || (_playlist[i] == -1))
+                {
+                    _localPlaylistIndex[i] = _playlist[i];
+                    if (_playlist[i] == -1)
+                    {
+                        string name = _playlistCustomURL[i].Get();
+                        string artist = "Unknown";
+                        if (name.Contains("youtube.com/watch?v="))
+                        {
+                            name = name.Split('=')[1].Split('&')[0];
+                            artist = "YouTube";
+                        }
+                        _playlistButtons[i].Setup(this, -1, name, artist, _playlistRequestedBy[i], 0, i);
+                    }
+                    else
+                    {
+                        int songIndex = _playlist[i];
+                        _playlistButtons[i].Setup(this, songIndex, Database.GetSongName(songIndex), Database.GetSongArtist(songIndex), _playlistRequestedBy[i], Database.GetSongLength(songIndex), i);
+                    }
+                }
+            }
+        }
+
+
 
         // ===================== Search =====================
 
         void ExecuteSearch()
         {
+            Debug.Log("[YT Tablet] ExecuteSearch");
             bool isArtistSearch = _searchTerm.StartsWith("artist:");
             if(isArtistSearch)
             {
-                _resultsSongs = _db.SearchByArtist(_searchTerm.Substring(7).Trim());
+                _resultsSongs = Database.SearchByArtist(_searchTerm.Substring(7).Trim());
                 _resultsArtists = new int[]{0,0,0};
             }else
             {
-                _resultsSongs = _db.SearchByName(_searchTerm);
-                _resultsArtists = _db.SearchArtist(_searchTerm);
+                _resultsSongs = Database.SearchByName(_searchTerm);
+                _resultsArtists = Database.SearchArtist(_searchTerm);
             }
-            
 
-            // clear old songs
-            foreach(Transform child in SongsContainer)
-            {
-                Destroy(child.gameObject);
-            }
-            // clear artists
-            foreach(Transform child in ArtistsContainer)
-            {
-                Destroy(child.gameObject);
-            }
+            ClearSearchObjects();
 
             _songsOffset = 0;
             _artistsOffset = 0;
@@ -327,186 +501,104 @@ namespace Thry.YTDB
 
             ArtistsContainer.parent.gameObject.SetActive(_resultsArtists[0] > 0);
             SongsContainer.parent.gameObject.SetActive(_resultsSongs[0] > 0);
-            ButtonDeepSearch.SetActive(true);
 
-            // Search result length syncing
             if(Networking.IsOwner(gameObject))
             {
                 _search_songs_loadSteps = 1;
                 _search_artists_loadSteps = 1;
+                _scrollSearchAbsolute = 0;
                 RequestSerialization();
             }
 
-            ShowLocalArtistSearch();
-            ShowLocalSongSearch();
+            ShowMoreArtists();
+            ShowMoreSongs();
+
+            Debug.Log("[YT Tablet] Done ExecuteSearch");
         }
 
-        void ShowSongs()
+        void ClearSearchObjects()
         {
-            if(_localUseSyncedSongSearchResults != _useSyncedSongSearchResults)
+            // clear old songs
+            foreach (Transform child in SongsContainer)
             {
-                // clear list
-                foreach(Transform child in SongsContainer)
-                {
-                    Destroy(child.gameObject);
-                }
-                _localUseSyncedSongSearchResults = _useSyncedSongSearchResults;
+                Destroy(child.gameObject);
             }
-            if(_useSyncedSongSearchResults) ShowSyncedSongSearch();
-            else ShowLocalSongSearch();
+            // clear artists
+            foreach (Transform child in ArtistsContainer)
+            {
+                Destroy(child.gameObject);
+            }
         }
 
-        void ShowLocalSongSearch()
+        void ShowMoreSongs()
         {
             if(_local_search_song_loadSteps >= _search_songs_loadSteps) return; // Search result length syncing
+            Debug.Log("[YT Tablet] ShowMoreSongs");
 
             bool isArtistSearch = _searchTerm.StartsWith("artist:");
             int listIndex = _songsOffset;
             for(int i = _resultsSongs[1] + _songsOffset; i < _resultsSongs[2] && i < _resultsSongs[1] + _songsOffset + SONGS_PER_LOAD_STEP; i++)
             {
                 int index = i;
-                if(isArtistSearch) index = _db.GetSongIdFromAristIndices(index);
-                ListItemPrefab.Setup(SongsContainer, listIndex, index, _db.GetSongName(index), _db.GetSongArtist(index), _db.GetSongLengthString(index));
+                if(isArtistSearch) index = Database.GetSongIdFromAristIndices(index);
+                ListItemPrefab.Setup(SongsContainer, listIndex, index, Database.GetSongName(index), Database.GetSongArtist(index), Database.GetSongLengthString(index));
                 listIndex++;
             }
             _songsOffset += SONGS_PER_LOAD_STEP;
-            ButtonSongsShowMore.SetActive(_songsOffset < _resultsSongs[0]);
             AdjustContainerHeight(SongsContainer, Mathf.Min(_resultsSongs[0], _songsOffset), 1, 80, 5);
+            ButtonSongsShowMore.SetActive(_songsOffset < _resultsSongs[0]);
 
             // Search result length syncing. Check done after call to handle value changing between frames
             _local_search_song_loadSteps = _songsOffset / SONGS_PER_LOAD_STEP;
-            SendCustomEventDelayedFrames(nameof(ShowLocalSongSearch), 1);
-            
-            _scrollSearch = ScrollbarSearch.verticalNormalizedPosition; // update scroll position after size change
+            SendCustomEventDelayedFrames(nameof(ShowMoreSongs), 1);
         }
 
-        public void ShowSyncedSongSearch()
-        {
-            // clear existing that don't match
-            for(int i = SongsContainer.childCount - 1; i >= 0; i--)
-            {
-                if(i >= _syncedSongSearchResults.Length ||
-                    SongsContainer.GetChild(i).GetComponent<YT_ListItem>().GetSongIndex() != _syncedSongSearchResults[i])
-                {
-                    Destroy(SongsContainer.GetChild(i).gameObject);
-                }
-            }
-            for(int i = SongsContainer.childCount; i < _syncedSongSearchResults.Length; i++)
-            {
-                if(_syncedSongSearchResults[i] == -1) break;
-                ListItemPrefab.Setup(SongsContainer, i, _syncedSongSearchResults[i], _db.GetSongName(_syncedSongSearchResults[i]), _db.GetSongArtist(_syncedSongSearchResults[i]), _db.GetSongLengthString(_syncedSongSearchResults[i]));
-            }
-            ButtonSongsShowMore.SetActive(false);
-            ButtonDeepSearch.SetActive(false);
-            AdjustContainerHeight(SongsContainer, SongsContainer.childCount, 1, 80, 5);
-            _scrollSearch = ScrollbarSearch.verticalNormalizedPosition; // update scroll position after size change
-        }
-
-        void ShowLocalArtistSearch()
+        void ShowMoreArtists()
         {
             if(_local_search_artists_loadSteps >= _search_artists_loadSteps) return; // Search result length syncing
+            Debug.Log("[YT Tablet] ShowMoreArtists");
 
-            for(int i = _resultsArtists[1] + _artistsOffset; i < _resultsArtists[2] && i < _resultsArtists[1] + _artistsOffset + ARTISTS_PER_LOAD_STEP; i++)
+            for (int i = _resultsArtists[1] + _artistsOffset; i < _resultsArtists[2] && i < _resultsArtists[1] + _artistsOffset + ARTISTS_PER_LOAD_STEP; i++)
             {
-                string artist = _db.GetArtistName(i);
+                string artist = Database.GetArtistName(i);
                 CardPrefab.Setup(ArtistsContainer, artist, "Artist", false, i, 
                     _self, nameof(OnArtistSelected), nameof(param_OnArtistSelected), i,
                     null, null, null, null);
             }
             _artistsOffset += ARTISTS_PER_LOAD_STEP;
-            ButtonArtistsShowMore.SetActive(_artistsOffset < _resultsArtists[0]);
             AdjustContainerHeight(ArtistsContainer, Mathf.Min(_resultsArtists[0], _artistsOffset), 5, 300, 30);
+            ButtonArtistsShowMore.SetActive(_artistsOffset < _resultsArtists[0]);
 
             // Search result length syncing. Check done after call to handle value changing between frames
             _local_search_artists_loadSteps = _artistsOffset / ARTISTS_PER_LOAD_STEP;
-            SendCustomEventDelayedFrames(nameof(ShowLocalArtistSearch), 1);
-
-            _scrollSearch = ScrollbarSearch.verticalNormalizedPosition; // update scroll position after size change
-        }
-
-        public void LoadMoreSongs()
-        {
-            Networking.SetOwner(Networking.LocalPlayer, gameObject);
-            _search_songs_loadSteps++;
-            ShowLocalSongSearch();
-            RequestSerialization();
-        }
-
-        public void LoadMoreArtists()
-        {
-            Networking.SetOwner(Networking.LocalPlayer, gameObject);
-            _search_artists_loadSteps++;
-            ShowLocalArtistSearch();
-            RequestSerialization();
+            SendCustomEventDelayedFrames(nameof(ShowMoreArtists), 1);
         }
 
         void AdjustContainerHeight(Transform contrainer, int elmCount, int countPerRow, int heightPerElm, int spacing)
         {
-            int rowCount = (int)((elmCount + countPerRow - 1) / countPerRow);
+            int rowCount = (elmCount + countPerRow - 1) / countPerRow;
             RectTransform rect = contrainer.GetComponent<RectTransform>();
             rect.sizeDelta = new Vector2(rect.sizeDelta.x, rowCount * heightPerElm + Mathf.Max(0, rowCount - 1) * spacing);
 
-            rect = contrainer.parent.GetComponent<RectTransform>();
             int height = 0;
             foreach(Transform child in contrainer.parent)
             {
-                if(child.gameObject.activeSelf)
-                {
-                    height += (int)child.GetComponent<RectTransform>().sizeDelta.y;
-                }
+                height += (int)child.GetComponent<RectTransform>().sizeDelta.y;
             }
+            rect = contrainer.parent.GetComponent<RectTransform>();
             rect.sizeDelta = new Vector2(rect.sizeDelta.x, height);
-        }
-
-        // ================== Slow Sarch ==================
-
-        public void InitSlowSearch()
-        {
-            Networking.SetOwner(Networking.LocalPlayer, gameObject);
-            ButtonDeepSearch.SetActive(false);
-            _syncedSongSearchResults = new int[SLOW_SEARCH_RESULTS];
-            _useSyncedSongSearchResults = true;
-            // fill with -1
-            for(int i = 0; i < _syncedSongSearchResults.Length; i++)
-            {
-                _syncedSongSearchResults[i] = -1;
-            }
-            _slowSearch_lastSearchSongIndex = 0;
-            _slowSearch_resultCount = 0;
-            _isSlowSearching = true;
-            RequestSerialization();
-        }
-
-        public void SlowSearchNext()
-        {
-            if(!_isSlowSearching) return;
-            if(Networking.IsOwner(gameObject) == false)
-            {
-                _isSlowSearching = false;
-                return;
-            }
-            int searchLength = (int)(Time.deltaTime * SLOW_SEARCH_LOOKUPS_PER_SECOND);
-            int[] newResults = _db.LinearSearchSongContains(_searchTerm, _slowSearch_lastSearchSongIndex, searchLength, SLOW_SEARCH_RESULTS);
-            // append new results to old results
-            Array.Copy(newResults, 0, _syncedSongSearchResults, _slowSearch_resultCount, Mathf.Min(newResults.Length, SLOW_SEARCH_RESULTS - _slowSearch_resultCount));
-            _slowSearch_resultCount = Mathf.Min(_slowSearch_resultCount + newResults.Length, SLOW_SEARCH_RESULTS);
-            _slowSearch_lastSearchSongIndex += searchLength;
-            if(_slowSearch_resultCount == SLOW_SEARCH_RESULTS || _slowSearch_lastSearchSongIndex >= _db.GetSongCount())
-            {
-                _isSlowSearching = false;
-            }
-            RequestSerialization();
-            ShowSongs();
         }
 
         // ================== Callbacks ==================
         [HideInInspector] public int param_OnArtistSelected;
         public void OnArtistSelected()
         {
-            string name = _db.GetArtistName(param_OnArtistSelected);
+            string name = Database.GetArtistName(param_OnArtistSelected);
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
             _searchTerm = "artist: " + name;
-            SearchText.text = _searchTerm;
+            SetSearchField();
+            //SearchText.text = _searchTerm;
+            // TODO
             RequestSerialization();
             ExecuteSearch();
         }
@@ -543,11 +635,17 @@ namespace Thry.YTDB
         // ================== Play Functions ==================
 
         bool _waitingToPlay = false;
+        void Play()
+        {
+            if (_playlist[0] == -1) PlayUrl(_playlistCustomURL[0]);
+            else Play(_playlist[0]);
+        }
+
         void Play(int index)
         {
+            if (index < 0) return;
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
-            _currentSongIndex = index;
-            PlayUrl(_db.GetSongURL(index));
+            PlayUrl(Database.GetSongURL(index));
         }
 
         void PlayUrl(VRCUrl url)
@@ -558,9 +656,8 @@ namespace Thry.YTDB
             if(!_waitingToPlay) // waiting in case of rate limitations by thumbnail loading
             {
                 _waitingToPlay = true;
-                float waitTime = ThubmnailLoader.GetRetryTime();
+                float waitTime = 0;
                 SendCustomEventDelayedSeconds(nameof(SendPlayCommand), waitTime);
-                ThubmnailLoader.TimeoutReqeusts(waitTime + 5.5f);
                 TriggerLoadAnimation(waitTime + 2);
             }
         }
@@ -605,9 +702,11 @@ namespace Thry.YTDB
                     break;
                 }
             }
-            if(earlistFreeUserIndex == -1) return;
+            if (earlistFreeUserIndex >= _playlistLength) earlistFreeUserIndex = _playlistLength;
+            Debug.Log(earlistFreeUserIndex);
+            if (earlistFreeUserIndex == -1 || earlistFreeUserIndex >= MAX_PLAYLIST_LENGTH) return;
             // if song is already in playlist, move it to earlist position
-            if(playlistIndex >= 0)
+            if (playlistIndex >= 0)
             {
                 if(earlistFreeUserIndex < playlistIndex)
                 {
@@ -630,7 +729,7 @@ namespace Thry.YTDB
             // start playing if nothing is playing
             if(!_isPlaying)
             {
-                Next();
+                Play();
             }
             UpdatePlaylist();
             RequestSerialization();
@@ -642,14 +741,49 @@ namespace Thry.YTDB
             _playlist[0] = -1;
             _playlistIsUserRequest[0] = true;
             _playlistRequestedBy[0] = Networking.LocalPlayer.displayName;
+            _playlistCustomURL[0] = url;
             PlayUrl(url);
             UpdatePlaylist();
             RequestSerialization();
             SendCustomEventDelayedSeconds(nameof(SendPlayCommand), 0.5f);
         }
 
+        void EnqueueCustom(VRCUrl url)
+        {
+            Debug.Log("[YT Tablet] EnqueueCustom");
+            int earlistFreeUserIndex = -1;
+            for (int i = 1; i < _playlist.Length; i++)
+            {
+                if (_playlistIsUserRequest[i] == false)
+                {
+                    earlistFreeUserIndex = i;
+                    break;
+                }
+            }
+            if (earlistFreeUserIndex >= _playlistLength) earlistFreeUserIndex = _playlistLength;
+            Debug.Log(earlistFreeUserIndex);
+            if (earlistFreeUserIndex == -1 || earlistFreeUserIndex >= MAX_PLAYLIST_LENGTH) return;
+            // if song is already in playlist, move it to earlist position
+            _playlist[earlistFreeUserIndex] = -1;
+            _playlistIsUserRequest[earlistFreeUserIndex] = true;
+            _playlistRequestedBy[earlistFreeUserIndex] = Networking.LocalPlayer.displayName;
+            _playlistCustomURL[earlistFreeUserIndex] = url;
+            if (earlistFreeUserIndex == _playlistLength)
+            {
+                _playlistLength++;
+            }
+            // start playing if nothing is playing
+            if (!_isPlaying)
+            {
+                Play();
+            }
+            UpdatePlaylist();
+            RequestSerialization();
+        }
+
         void ReplacePlaylistHead(int newHead)
         {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
             _playlist[0] = param_OnReplaceFirst;
             _playlistIsUserRequest[0] = true;
             _playlistRequestedBy[0] = Networking.LocalPlayer.displayName;
@@ -660,6 +794,8 @@ namespace Thry.YTDB
 
         void PlayAndStartNewPlaylist(int index)
         {
+            Debug.Log($"[YT Tablet] Starting Playlit with {Database.GetSongName(index)}");
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
             Play(index);
             _playlist[0] = index;
             _playlistIsUserRequest[0] = true;
@@ -668,9 +804,10 @@ namespace Thry.YTDB
             ShiftPlaylistBy(0);
         }
 
-        void PrevSongEnqueue(int song)
+        void PrevSongEnqueue(int song, VRCUrl url)
         {
             _previousSongs[_previousSongsHead] = song;
+            _previousUrls[_previousSongsHead] = url;
             _previousSongsHead = (_previousSongsHead + 1) % _previousSongs.Length;
             if(_previousSongsHead == _previousSongsTail)
             {
@@ -685,11 +822,13 @@ namespace Thry.YTDB
             return _previousSongs.Length - _previousSongsTail + _previousSongsHead;
         }
 
+        VRCUrl _previous_url_result;
         int PrevSongDequeue()
         {
             if(_previousSongsHead == _previousSongsTail) return -1;
             _previousSongsHead = (_previousSongsHead - 1 + _previousSongs.Length) % _previousSongs.Length;
             int song = _previousSongs[_previousSongsHead];
+            _previous_url_result = _previousUrls[_previousSongsHead];
             return song;
         }
 
@@ -700,7 +839,7 @@ namespace Thry.YTDB
             {
                 if(_playlist[i] >= 0 && _playlistIsUserRequest[i])
                 {
-                    int songId = _db.GetRandomRealtedNotInList(_playlist[i], _playlist, _playlistLength);
+                    int songId = Database.GetRandomRealtedNotInList(_playlist[i], _playlist, _playlistLength);
                     if(songId >= 0) return new int[]{ songId, i };
                 }
             }
@@ -710,14 +849,14 @@ namespace Thry.YTDB
             {
                 int j = (start + i) % _playlistLength;
                 if(_playlist[i] < 0) continue;
-                int songId = _db.GetRandomRealtedNotInList(_playlist[j], _playlist, _playlistLength);
+                int songId = Database.GetRandomRealtedNotInList(_playlist[j], _playlist, _playlistLength);
                 if(songId >= 0) return new int[]{ songId, j };
             }
             // else get first related song from any song in playlist
             for(int i=0;i<_playlist.Length;i++)
             {
                 if(_playlist[i] < 0) continue;
-                int songId = _db.GetRandomRelated(i);
+                int songId = Database.GetRandomRelated(i);
                 if(songId >= 0) return new int[]{ songId, i };
             }
             return new int[]{ -1, -1 };
@@ -727,7 +866,7 @@ namespace Thry.YTDB
         {
             for(int i = 0; i < count; i++)
             {
-                PrevSongEnqueue(_playlist[i]);
+                PrevSongEnqueue(_playlist[i], _playlistCustomURL[i]);
             }
             _playlistLength = _playlistLength - count;
             for(int i = 0; i < _playlistLength; i++)
@@ -735,6 +874,7 @@ namespace Thry.YTDB
                 _playlist[i] = _playlist[i + count];
                 _playlistIsUserRequest[i] = _playlistIsUserRequest[i + count];
                 _playlistRequestedBy[i] = _playlistRequestedBy[i + count];
+                _playlistCustomURL[i] = _playlistCustomURL[i + count];
             }
             for(int i = _playlistLength; i < PLAYLIST_AUTO_GEN_LENGTH; i++)
             {
@@ -742,7 +882,7 @@ namespace Thry.YTDB
                 _playlist[i] = autoGen[0];
                 if(autoGen[0] < 0) break; // this should never happen
                 _playlistIsUserRequest[i] = false;
-                _playlistRequestedBy[i] = "Auto: " + _db.GetSongArtist(_playlist[autoGen[1]]); // list artist as requester
+                _playlistRequestedBy[i] = "Auto: " + Database.GetSongArtist(_playlist[autoGen[1]]); // list artist as requester
                 _playlistLength = i + 1;
             }
             UpdatePlaylist();
@@ -773,8 +913,8 @@ namespace Thry.YTDB
         {
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
             if(_playlistLength == 0) return;
-            SendSkipPlayRequest(_playlist[1]);
             ShiftPlaylistBy(1);
+            SendPlayRequest();
         }
 
         public void Previous()
@@ -789,11 +929,13 @@ namespace Thry.YTDB
                     _playlist[i] = _playlist[i - 1];
                     _playlistIsUserRequest[i] = _playlistIsUserRequest[i - 1];
                     _playlistRequestedBy[i] = _playlistRequestedBy[i - 1];
+                    _playlistCustomURL[i] = _playlistCustomURL[i - 1];
                 }
                 _playlist[0] = index;
                 _playlistIsUserRequest[0] = true;
                 _playlistRequestedBy[0] = Networking.LocalPlayer.displayName;
-                SendSkipPlayRequest(index);
+                _playlistCustomURL[0] = _previous_url_result;
+                SendPlayRequest();
                 UpdatePlaylist();
                 RequestSerialization();
             }
@@ -801,10 +943,9 @@ namespace Thry.YTDB
 
         // Rate Limiting Skips
         // Adding a delay to manual skip requests to prevent spamming of video player which results in the wrong video playing
-        void SendSkipPlayRequest(int index)
+        void SendPlayRequest()
         {
             _skipCallCount++;
-            _currentSongIndex = index;
             SendCustomEventDelayedSeconds(nameof(HandleSkipPlayRequest), 0.5f);
         }
 
@@ -813,7 +954,7 @@ namespace Thry.YTDB
             _skipCallCount--;
             if(_skipCallCount == 0)
             {
-                Play(_currentSongIndex);
+                Play();
             }
         }
     }
